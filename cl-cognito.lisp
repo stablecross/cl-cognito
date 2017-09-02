@@ -171,6 +171,12 @@
   (ensure-leading-00 (ensure-even-length (integer-to-hex-string n))))
 
 ;;;
+;;; ensure hs at least 64 characters with leading zero fill
+;;;
+(defun pad-hex-string (hs)
+  (format nil "~64,1,0,'0@a" hs))
+
+;;;
 ;;; Python pow(base exp modulus)
 ;;; cf.
 ;;;   https://stackoverflow.com/questions/8496182/calculating-powa-b-mod-n
@@ -201,21 +207,24 @@
 (defun sha256/ba (vector_ba)
   (ironclad:digest-sequence :sha256 vector_ba))
 
-(defun sha256/hs (vector_ba)
-  (ironclad:byte-array-to-hex-string (sha256/ba vector_ba)))
+(defun sha256/hs64 (vector_ba)
+  (pad-hex-string (ironclad:byte-array-to-hex-string (sha256/ba vector_ba))))
 
-(defun hex-hash (string_hs)
+;;;
+;;; return the integer sha256 hash of string_hs
+;;;
+(defun hash-hex-string (string_hs)
   (ironclad:octets-to-integer (sha256/ba (ironclad:hex-string-to-byte-array string_hs))))
 
 (defun calculate-u (big-a srp-b)
-  (hex-hash (concatenate 'string (integer-to-padded-hex-string big-a) (integer-to-padded-hex-string srp-b))))
+  (hash-hex-string (concatenate 'string (integer-to-padded-hex-string big-a) (integer-to-padded-hex-string srp-b))))
 
 ;;;
 ;;; "Wed Aug 23 21:53:22 UTC 2017"
 ;;;
 (defun timestamp/s (time)
   (local-time:format-timestring nil time
-				:format '(:short-weekday " " :short-month " " (:day 2) " " (:hour 2) ":" (:min 2) ":" (:sec 2) " UTC " :year)
+				:format '(:short-weekday " " :short-month " " :day " " (:hour 2) ":" (:min 2) ":" (:sec 2) " UTC " :year)
 				:timezone local-time:+utc-zone+))
 
 (defun hkdf (ikm salt)
@@ -236,8 +245,8 @@
 (defun password-authentication-key/ba (password_s large-a small-a k pool_s user-id-for-srp srp-b salt)
   (let ((u (calculate-u large-a srp-b)))
     (assert (not (zerop u)))
-    (let* ((username-password-hash_hs (sha256/hs (string-to-octets (concatenate 'string pool_s user-id-for-srp ":" password_s))))
-	   (x (hex-hash (concatenate 'string (integer-to-padded-hex-string salt) username-password-hash_hs)))
+    (let* ((username-password-hash_hs (sha256/hs64 (string-to-octets (concatenate 'string pool_s user-id-for-srp ":" password_s))))
+	   (x (hash-hex-string (concatenate 'string (integer-to-padded-hex-string salt) username-password-hash_hs)))
 	   (s (power-mod (- srp-b (* k (power-mod *g* x *n*))) (+ small-a (* u x)) *n*)))
     (hkdf s u))))
 
@@ -309,7 +318,7 @@
   (let* ((url_s (make-cognito-url/s client (region/s pool-id)))
 	 (small-a (generate-random-small-a))
 	 (large-a (calculate-a small-a))
-	 (k (hex-hash (concatenate 'string "00" (integer-to-hex-string *n*) "0" (integer-to-hex-string *g*))))
+	 (k (hash-hex-string (concatenate 'string "00" (integer-to-hex-string *n*) "0" (integer-to-hex-string *g*))))
 	 (secret-hash_s64 (make-client-secret/s64 client-secret client-id username)))
     (multiple-value-bind (result_js code response_js)
 	(post url_s
