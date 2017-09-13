@@ -16,11 +16,13 @@ These Amazon Cognito objects are used in this interface:
 The nickname **cognito** can be used for the **cl-cognito** package.
 
 [Function]<br>
-**authenticate-user** (username password pool-id client-id &key (client "cognito-idp") (client-secret nil) (user-email nil))
+**authenticate-user** (username password pool-id client-id &key (client "cognito-idp") (client-secret nil) (user-email nil) (new-password nil))
 
 		=> result, code, response
 		
 		If **client-secret** is not nil then **user-email** must be provided.
+		
+		If new-password is not nil and a new password is required then the existing password will be changed.
 		
 		On success, returns **result** which is a list of the form:
 		
@@ -48,7 +50,28 @@ The nickname **cognito** can be used for the **cl-cognito** package.
 		code => 400
 		response => ((:----TYPE . "NotAuthorizedException")
  		             (:MESSAGE . "Incorrect username or password."))
+ 		             
+ 		A password that must be changed will result in:
+ 		
+ 		result => ((:*CHALLENGE-NAME . "NEW_PASSWORD_REQUIRED")
+                   (:*CHALLENGE-PARAMETERS (:REQUIRED-ATTRIBUTES . "[]")
+                   (:USER-ATTRIBUTES . "..."))
+                   (:*SESSION . "..."))
+		code => 200
+		response => nil
+ 		             
+ 		A password that must be reset will result in:
+ 		
+ 		result => NIL
+ 		code => 400
+ 		response => ((:----TYPE . "PasswordResetRequiredException")
+                     (:MESSAGE . "Password reset required for the user"))
 
+[Function]<br>
+**new-password-required?** (result)
+
+		Returns t if the result from **authenticate-user** indicates a new password is required.  If so,
+		repeat the call to *authenticate-user** and set :new-passowrd to the new desired passowrd.
 
 [Function]<br>
 **reauthenticate-user** (username refresh-token pool-id client-id &key (client "cognito-idp") (client-secret nil) (user-email nil))
