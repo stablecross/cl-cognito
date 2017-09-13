@@ -31,6 +31,7 @@
   (:nicknames #:cognito)
   (:export
    #:authenticate-user
+   #:new-password-required?
    #:reauthenticate-user
    #:sign-out))
 
