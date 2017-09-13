@@ -1,13 +1,19 @@
-Version 1.0.1   2 Sep 2017
+Version 1.2.0 12 September 2017 
+==========================
+* cleaned up the version 1.0.1 change notes
+* added a note on the return value PasswordResetRequiredException
+* added the :new-password keyword parameter to authenticate-user
+* authenticate-user will update the password if Cognito requires the password
+  to be changed and :new-password is non-nil.
+* added new-password-required? to help determine if a new password is needed.
+
+Version 1.0.1  2 Sep 2017
 ==========================
 * timestamp/s was converting the day to "Sat Sep 02 01:02:03 UTC 2017".  Amazon doesn't like the leading zero on the day.
-* renamed hex-hash to hash-hex-string, since every place hex-hash was used, it took a hex string as input, computed the
-  hash, which was then converted to an integer.
-* renamed sha256/hs as sha256/hs64 and return ensure the resulting string is at least 64 characters, padded with leading
-  '0's.
+* renamed hex-hash to hash-hex-string, since every place hex-hash was used, it took a hex string as input and computed
+  the hash which was then everywhere converted to an integer.
+* renamed sha256/hs as sha256/hs64 and ensured the resulting string was at least 64 characters, padded with leading '0's.
 
 Version 1.0.0, 24 Aug 2017
 ==========================
 * initial release
-
-
