@@ -16,13 +16,15 @@ These Amazon Cognito objects are used in this interface:
 The nickname **cognito** can be used for the **cl-cognito** package.
 
 [Function]<br>
-**authenticate-user** (username password pool-id client-id &key (client "cognito-idp") (client-secret nil) (user-email nil) (new-password nil))
+**authenticate-user** (username password pool-id client-id &key (client "cognito-idp") (client-secret nil) (user-email nil) (new-password nil) (new-full-name nil) (new-phone nil) (new-email nil))
 
 		=> result, code, response
 		
-		If **client-secret** is not nil then **user-email** must be provided.
+		If **client-secret** is not nil then **user-email** must be provided.  On a password change where new user e-mail is required,
+		both user-email and new-email must be the same.
 		
 		If new-password is not nil and a new password is required then the existing password will be changed.
+		new-full-name, new-phone, and new-email will be sent to Congito if required and not nil. 
 		
 		On success, returns **result** which is a list of the form:
 		
@@ -51,7 +53,7 @@ The nickname **cognito** can be used for the **cl-cognito** package.
 		response => ((:----TYPE . "NotAuthorizedException")
  		             (:MESSAGE . "Incorrect username or password."))
  		             
- 		A password that must be changed will result in:
+ 		A password that must be changed might result in:
  		
  		result => ((:*CHALLENGE-NAME . "NEW_PASSWORD_REQUIRED")
                    (:*CHALLENGE-PARAMETERS (:REQUIRED-ATTRIBUTES . "[]")
@@ -71,7 +73,16 @@ The nickname **cognito** can be used for the **cl-cognito** package.
 **new-password-required?** (result)
 
 		Returns t if the result from **authenticate-user** indicates a new password is required.  If so,
-		repeat the call to *authenticate-user** and set :new-passowrd to the new desired passowrd.
+		repeat the call to *authenticate-user** and set :new-passowrd to the new desired password.
+		:new-full-name, :new-phone, and :new-mail may also need to be provided.
+		
+[Function]<br>
+**new-password-attributes** (result)
+
+		Returns a list of the attributes required for a password change if the result from **authenticate-user**
+		indicates a new password is required.  Example:
+		
+		  ("userAttributes.email" "userAttributes.phone_number" "userAttributes.name")
 
 [Function]<br>
 **reauthenticate-user** (username refresh-token pool-id client-id &key (client "cognito-idp") (client-secret nil) (user-email nil))
@@ -103,6 +114,8 @@ The nickname **cognito** can be used for the **cl-cognito** package.
 
 The URL to use to interact with Cognito is constructed by the private function **(make-cognito-url/s client\_s region\_s)**
 No clients other than "cognito-idp" and no regions other than those in the US have been tested.
+
+It isn't clear that defining authenticate-user to take :new-full-name, :new-email, and :new-phone is the best design choice.
 
 #### HTTP engine
 [Dexador](http://quickdocs.org/dexador/) is used to process HTTPS requests.  The code encapsulates this in one function, so it would be easy

@@ -32,6 +32,7 @@
   (:export
    #:authenticate-user
    #:new-password-required?
+   #:new-password-attributes
    #:reauthenticate-user
    #:sign-out))
 

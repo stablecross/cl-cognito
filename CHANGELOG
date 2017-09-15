@@ -1,3 +1,10 @@
+Version 1.3.0 15 September 2017 
+===============================
+* Add :new-full-name, :new-phone, and :new-email to authenticate-user for the case where required
+  parameters are needed when changing the password.
+* New function new-password-attributes
+* Fixed missing :*TIMESTAMP in some return paths from authenticate-user.
+
 Version 1.2.1 13 September 2017 
 ===============================
 * Fix botched push to repo.
