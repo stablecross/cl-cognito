@@ -269,11 +269,10 @@
 							    ,@(if secret-hash_s64 `(("SECRET_HASH" . ,secret-hash_s64)
 										    ("EMAIL" . ,user-email_s))))))))
 
-(defun verify-password (url_s password_s large-a small-a k client-id_s pool_s secret-hash_s64 user-email_s challenge-parameters)
+(defun verify-password (the-time url_s password_s large-a small-a k client-id_s pool_s secret-hash_s64 user-email_s challenge-parameters)
   (let* ((user-id-for-srp_s (xjson:json-key-value :+USER-ID-FOR-SRP+ challenge-parameters))
 	 (secret-block_b64s (xjson:json-key-value :+SECRET-BLOCK+ challenge-parameters))
 	 (username_s (xjson:json-key-value :+USERNAME+ challenge-parameters))
-	 (the-time (local-time:now))
 	 (timestamp_s (timestamp/s the-time))
 	 (hkdf_ba (password-authentication-key/ba password_s
 						  large-a
@@ -285,17 +284,18 @@
 						  (hex-string-to-integer (xjson:json-key-value :+SALT+ challenge-parameters))))
 	 (secret-block_ba (cl-base64:base64-string-to-usb8-array secret-block_b64s))
 	 (signature-string_b64s (signature-string/b64s hkdf_ba pool_s user-id-for-srp_s secret-block_ba timestamp_s)))
-    (multiple-value-bind (result_js code response_js)
+    (multiple-value-bind (result_js result-code response_js)
 	(post url_s
 	      '(("Content-type" . "application/x-amz-json-1.1")
 		("X-Amz-Target" . "AWSCognitoIdentityProviderService.RespondToAuthChallenge"))
 	      (verify-password-content/s client-id_s timestamp_s username_s secret-block_b64s signature-string_b64s secret-hash_s64 user-email_s))
-      (let ((creds (xjson:json-key-value :*AUTHENTICATION-RESULT result_js)))
-	(if creds
-	    (values (append creds `((:*TIMESTAMP . ,(local-time:timestamp-to-universal the-time)))) code response_js)
-	    (values result_js code response_js))))))
+      (values result_js result-code response_js))))
 
-(defun change-password (url_s username_s new-password_s client-id session-id secret-hash_s64)
+(defun attribute (required-attributes attribute-name attribute-value)
+  (and attribute-value (member attribute-name required-attributes :test #'equalp) (list (cons attribute-name attribute-value))))
+
+(defun change-password (url_s username_s client-id session-id secret-hash_s64
+			new-password_s required-attributes new-full-name_s new-phone_s new-email_s)
   (multiple-value-bind (change-result_js change-code change-response_js)
       (post url_s
 	    '(("Content-type" . "application/x-amz-json-1.1")
@@ -304,8 +304,10 @@
 					     ("ClientId" . ,client-id)
 					     ("ChallengeResponses" . (("USERNAME" . ,username_s)
 								      ("NEW_PASSWORD" . ,new-password_s)
-								      ,@(if secret-hash_s64 `(("SECRET_HASH" . ,secret-hash_s64)))))
-
+								      ,@(if secret-hash_s64 `(("SECRET_HASH" . ,secret-hash_s64)))
+								      ,@(attribute required-attributes "userAttributes.name" new-full-name_s)
+								      ,@(attribute required-attributes "userAttributes.phone_number" new-phone_s)
+								      ,@(attribute required-attributes "userAttributes.email" new-email_s)))
 					     ("Session" . ,session-id))))
     (values change-result_js change-code change-response_js)))
   
@@ -331,7 +333,22 @@
   (and (listp result_js)
        (equal (xjson:json-key-value :*CHALLENGE-NAME result_js) "NEW_PASSWORD_REQUIRED")))
 
-(defun authenticate-user (username password pool-id client-id &key (client "cognito-idp") (client-secret nil) (user-email nil) (new-password nil))
+;;;
+;;; make a list of required attributes, e.g. '("userAttributes.email" "userAttributes.phone")
+;;;
+(defun new-password-attributes (result_js)
+  (let* ((challenge-parameters (xjson:json-key-value :*CHALLENGE-PARAMETERS result_js))
+	 (required-attributes (xjson:json-key-value :REQUIRED-ATTRIBUTES challenge-parameters)))
+    (json::decode-json-from-string (or required-attributes "{}"))))
+
+(defun timestamp-result (the-time result_js result-code response_js)
+  (let ((creds (xjson:json-key-value :*AUTHENTICATION-RESULT result_js)))
+    (if creds
+	(values (append creds `((:*TIMESTAMP . ,(local-time:timestamp-to-universal the-time)))) result-code response_js)
+	(values result_js result-code response_js))))
+
+(defun do-authenticate-user (the-time username password pool-id client-id client client-secret user-email
+			     new-password new-full-name new-phone new-email)
   (check-client-secret-parameters client-secret user-email)
   (let* ((url_s (make-cognito-url/s client (region/s pool-id)))
 	 (small-a (generate-random-small-a))
@@ -346,21 +363,34 @@
       (if (equal (xjson:json-key-value :*CHALLENGE-NAME result_js) "PASSWORD_VERIFIER")
 	  (let ((challenge-parameters (xjson:json-key-value :*CHALLENGE-PARAMETERS result_js)))
 	    (multiple-value-bind (verify-result_js verify-code verify-response_js)
-		(verify-password url_s password large-a small-a k client-id (pool/s pool-id) secret-hash_s64 user-email challenge-parameters)
+		(verify-password the-time url_s password large-a small-a k client-id (pool/s pool-id) secret-hash_s64 user-email challenge-parameters)
 	      (if (and (new-password-required? verify-result_js) new-password)
-		  (let ((session-id (xjson:json-key-value :*SESSION verify-result_js)))
+		  (let ((session-id (xjson:json-key-value :*SESSION verify-result_js))
+			(required-attributes (new-password-attributes verify-result_js)))
 		    (multiple-value-bind (change-result_js change-code change-response_js)
-			(change-password url_s (xjson:json-key-value :+USER-ID-FOR-SRP+ challenge-parameters) new-password client-id session-id secret-hash_s64)
+			(change-password url_s (xjson:json-key-value :+USER-ID-FOR-SRP+ challenge-parameters) client-id session-id secret-hash_s64
+					 new-password required-attributes new-full-name new-phone new-email)
 		      (values change-result_js change-code change-response_js)))
 		  (values verify-result_js verify-code verify-response_js))))
 	  (values result_js result-code response_js)))))
+
+(defun authenticate-user (username password pool-id client-id
+			  &key (client "cognito-idp")
+			    (client-secret nil) (user-email nil)
+			    (new-password nil) (new-full-name nil) (new-phone nil) (new-email nil))
+  (let ((the-time (local-time:now)))
+    (multiple-value-bind (result_js result-code response_js)
+	(do-authenticate-user the-time username password pool-id client-id client client-secret user-email new-password new-full-name new-phone new-email)
+      (multiple-value-bind (time-result_js time-result-code time-response_js)
+	  (timestamp-result the-time result_js result-code response_js)
+	(values time-result_js time-result-code time-response_js)))))
 
   
 (defun reauthenticate-user (username refresh-token pool-id client-id &key (client "cognito-idp") (client-secret nil))
     (let* ((url_s (make-cognito-url/s client (region/s pool-id)))
 	   (secret-hash_s64 (make-client-secret/s64 client-secret client-id username))
 	   (the-time (local-time:now)))
-      (multiple-value-bind (result_js code response_js)
+      (multiple-value-bind (result_js result-code response_js)
 	  (post url_s
 		'(("Content-type" . "application/x-amz-json-1.1")
 		  ("X-Amz-Target" . "AWSCognitoIdentityProviderService.InitiateAuth"))
@@ -370,10 +400,9 @@
 								      ("REFRESH_TOKEN" . ,refresh-token)
 								      ,@(if secret-hash_s64 `(("SECRET_HASH" . ,secret-hash_s64)))))
 						 ("ClientMetadata" . ,(xjson:json-empty)))))
-	(let ((creds (xjson:json-key-value :*AUTHENTICATION-RESULT result_js)))
-	  (if creds
-	      (values (append creds `((:*TIMESTAMP . ,(local-time:timestamp-to-universal the-time)))) code response_js)
-	      (values result_js code response_js))))))
+	(multiple-value-bind (time-result_js time-result-code time-response_js)
+	    (timestamp-result the-time result_js result-code response_js)
+	  (values time-result_js time-result-code time-response_js)))))
    
 (defun sign-out (access-token pool-id &key (client "cognito-idp"))
   (let* ((url_s (make-cognito-url/s client (region/s pool-id))))
