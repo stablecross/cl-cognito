@@ -1,7 +1,8 @@
 ###cl-cognito:  A Common Lisp Interface to Amazon Cognito.
 
 The primary purpose of this libary is to be able to obtain Amazon Cognito access, id, and
-refresh tokens based on Amazon Cognito user pool credentials.
+refresh tokens based on Amazon Cognito user pool credentials.  A secondary purpose is to
+provide other Cognito services over time.
 
 These Amazon Cognito objects are used in this interface:
 
@@ -9,14 +10,17 @@ These Amazon Cognito objects are used in this interface:
 **password**      : Cognito password.<br>
 **pool-id**       : See Cognito -> User Pools -> General Settings.<br>
 **client-id**     : See Cognito -> App clients -> App client id.<br>
-**client**        : "cognito-idp".  Other values may be possible, but this package doesn't know how to deal with them.<br>
+**service**       : "cognito-idp".  Other values may be possible, but this package doesn't know how to deal with them.<br>
 **client-secret** : Optional.  See Cognito -> App clients -> App client id -> Show More Details -> App client secret.<br>
 **user-email**    : Cognito e-mail.  See Cognito -> User Pools -> Users and Groups.<br>
+**access-key**    : Your user security credentials.
+**secret-key**    :
+
 
 The nickname **cognito** can be used for the **cl-cognito** package.
 
 [Function]<br>
-**authenticate-user** (username password pool-id client-id &key (client "cognito-idp") (client-secret nil) (user-email nil) (new-password nil) (new-full-name nil) (new-phone nil) (new-email nil))
+**authenticate-user** (username password pool-id client-id &key (service "cognito-idp") (client-secret nil) (user-email nil) (new-password nil) (new-full-name nil) (new-phone nil) (new-email nil))
 
 		=> result, code, response
 		
@@ -68,6 +72,8 @@ The nickname **cognito** can be used for the **cl-cognito** package.
  		code => 400
  		response => ((:----TYPE . "PasswordResetRequiredException")
                      (:MESSAGE . "Password reset required for the user"))
+                     
+    	Use confirm-forgot-password to reset the password.
 
 [Function]<br>
 **new-password-required?** (result)
@@ -85,7 +91,7 @@ The nickname **cognito** can be used for the **cl-cognito** package.
 		  ("userAttributes.email" "userAttributes.phone_number" "userAttributes.name")
 
 [Function]<br>
-**reauthenticate-user** (username refresh-token pool-id client-id &key (client "cognito-idp") (client-secret nil) (user-email nil))
+**reauthenticate-user** (username refresh-token pool-id client-id &key (service "cognito-idp") (client-secret nil) (user-email nil))
 
 		=> result, code, response
 		
@@ -99,9 +105,31 @@ The nickname **cognito** can be used for the **cl-cognito** package.
 		 (:*TIMESTAMP . 3712528761))
 
 		If **client-secret** is nil then it appears that AWS doesn't care what *username* is.  YMMV.
+
+[Function]<br>
+**forgot-password** (username pool-id client-id &key (service "cognito-idp") (client-secret nil))
+
+		Causes a confirmation code which can be used by confirm-forgot-password to be sent to the user.
+
+		=> result, code, response
+
+		If successful, result is t.
+		
+		Note that this doesn't expire the old password -- the old password can still be used until changed
+		by confirm-forgot-password.
+
+[Function]<br>
+**confirm-forgot-password** (username confirmation-code new-password pool-id client-id &key (service "cognito-idp") (client-secret nil))
+
+		Change password to new-password.
+		
+		=> result, code, response
+
+		If successful, result is t.
+		
 		
 [Function]<br>
-**sign-out** (access-token pool-id &key (client "cognito-idp"))
+**sign-out** (access-token pool-id &key (service "cognito-idp"))
 
 		=> result, code, response
 		
@@ -109,11 +137,24 @@ The nickname **cognito** can be used for the **cl-cognito** package.
 		
 		Returns t on success, nil on failure.  **code** and **response** can be used to
 		determine failure cause.
-		
+
+[Function]<br>
+**admin-get-user** (username pool-id access-key secret-key &key (service "cognito-idp"))
+
+		=> result, code, response
+
+[Function]<br>
+**admin-reset-user-password** (username pool-id access-key secret-key &key (service "cognito-idp"))
+
+		=> result, code, response
+
+		Returns t on success, nil on failure.  **code** and **response** can be used to
+		determine failure cause.
+
 #### BUGS
 
-The URL to use to interact with Cognito is constructed by the private function **(make-cognito-url/s client\_s region\_s)**
-No clients other than "cognito-idp" and no regions other than those in the US have been tested.
+The URL to use to interact with Cognito is constructed by the private function **(make-aws-url/s service\_s region\_s)**.<br>
+No services other than "cognito-idp" and no regions other than those in the US have been tested.
 
 It isn't clear that defining authenticate-user to take :new-full-name, :new-email, and :new-phone is the best design choice.
 
@@ -125,8 +166,7 @@ to use [Drakma](http://www.weitz.de/drakma/), instead.
 [https://github.com/stablecross/cl-cognito](https://github.com/stablecross/cl-cognito)
 
 ####License
-cl-cognito is available under a BSD-like license.  See the file LICENSE for
-details.
+cl-cognito is available under a BSD-like license.  See the file LICENSE for details.
 
 #### Contact
 For any questions or comments, please feel free to email me, Bob Felts
