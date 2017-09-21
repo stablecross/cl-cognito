@@ -79,6 +79,8 @@
 
 (defparameter *g* 2)
 
+(defparameter *nl* (format nil "~c" #\Newline))
+
 ;;;;
 ;;;; general support routines
 ;;;;
@@ -101,6 +103,41 @@
 (defun json-decode-octets/js (octets)
   (json:decode-json-from-string (octets-to-string octets)))
 
+;;;
+;;; convert n to hex string
+;;; ensure even number of characters
+;;; then, if the string begins with [89abcdef],
+;;; prepend '00'
+;;;
+(defun ensure-even-length (s)
+  (if (oddp (length s))
+      (concatenate 'string "0" s)
+      s))
+
+(defun ensure-leading-00 (s)
+  (assert (plusp (length s)))
+  (if (position (aref s 0) "89abcdef")
+      (concatenate 'string "00" s)
+      s))
+
+(defun integer-to-padded-hex-string (n)
+  (ensure-leading-00 (ensure-even-length (integer-to-hex-string n))))
+
+;;;
+;;; ensure hs at least 64 characters with leading zero fill
+;;;
+(defun pad-hex-string (hs)
+  (format nil "~64,1,0,'0@a" hs))
+
+(defun sha256/ba (vector_ba)
+  (ironclad:digest-sequence :sha256 vector_ba))
+
+(defun ba/hs64 (vector_ba)
+  (pad-hex-string (ironclad:byte-array-to-hex-string vector_ba)))
+
+(defun sha256/hs64 (vector_ba)
+  (ba/hs64 (sha256/ba vector_ba)))
+
 ;;;;
 ;;;; dexador interface
 ;;;;
@@ -112,17 +149,18 @@
 ;;;  result code nil => in the success case
 ;;;  nil code response => in the error case
 ;;;
-(defun post (url_s headers_s content_s)
+(defun post (url_s headers content_s)
   (handler-case
       (multiple-value-bind (result code)
 	  (dex:post url_s
-		    :headers headers_s
+		    :headers headers
 		    :content content_s
 		    :keep-alive *dex-keep-alive*
 		    :verbose *dex-verbose*)
 	(values (json-decode-octets/js result) code nil))
     (dex:http-request-failed (e)
       (values nil (dex:response-status e) (json-decode-octets/js (dex:response-body e))))))
+
 
 ;;;;
 ;;;; AWS support routines
@@ -146,35 +184,125 @@
 ;;; here.  For example, I've seen (but not studied) code that special cases
 ;;; things in Canada.
 ;;;
-(defun make-cognito-url/s (client_s region_s)
-  (concatenate 'string "https://" client_s "." region_s ".amazonaws.com"))
-	   
-;;;
-;;; convert n to hex string
-;;; ensure even number of characters
-;;; then, if the string begins with [89abcdef],
-;;; prepend '00'
-;;;
-;;;
-(defun ensure-even-length (s)
-  (if (oddp (length s))
-      (concatenate 'string "0" s)
-      s))
+(defun make-aws-host/s (service_s region_s)
+  (concatenate 'string service_s "." region_s ".amazonaws.com"))
 
-(defun ensure-leading-00 (s)
-  (assert (plusp (length s)))
-  (if (position (aref s 0) "89abcdef")
-      (concatenate 'string "00" s)
-      s))
+(defun make-aws-endpoint (host_s)
+  (concatenate 'string "https://" host_s))
 
-(defun integer-to-padded-hex-string (n)
-  (ensure-leading-00 (ensure-even-length (integer-to-hex-string n))))
+(defun make-aws-url/s (service_s region_s)
+  (make-aws-endpoint (make-aws-host/s service_s region_s)))
 
 ;;;
-;;; ensure hs at least 64 characters with leading zero fill
+;;; http://docs.aws.amazon.com/general/latest/gr/sigv4-date-handling.html
 ;;;
-(defun pad-hex-string (hs)
-  (format nil "~64,1,0,'0@a" hs))
+;;;  The time stamp must be in UTC and in the following ISO 8601 format: YYYYMMDD'T'HHMMSS'Z'.
+;;;  For example, 20150830T123600Z is a valid time stamp.
+;;;
+(defun aws-timestamp (the-time)
+    (local-time:format-timestring nil the-time
+				:format '(:year (:month 2) (:day 2) "T" (:hour 2) (:min 2) (:sec 2) "Z")
+				:timezone local-time:+utc-zone+))
+
+;;;
+;;; YYYYMMDD
+;;;
+(defun aws-datestamp (the-time)
+    (local-time:format-timestring nil the-time
+				:format '(:year (:month 2) (:day 2))
+				:timezone local-time:+utc-zone+))
+  
+
+(defun aws4-credential-scope (the-time region service)
+  (format nil "~a/~a/~a/aws4_request" (aws-datestamp the-time) region service))
+
+(defun aws-sign (msg key)
+  (let ((hmac (ironclad:make-hmac key :sha256)))
+    (ironclad:update-hmac hmac (string-to-octets msg))
+    (ironclad:hmac-digest hmac)))
+
+;;;
+;;; http://docs.aws.amazon.com/general/latest/gr/signature-v4-examples.html
+;;; 
+(defun aws4-signing-key (secret-key the-time region service)
+  (let ((key (string-to-octets (concatenate 'string "AWS4" secret-key)))
+	(date (aws-datestamp the-time)))
+    (aws-sign "aws4_request" (aws-sign service (aws-sign region (aws-sign date key))))))
+
+;;;
+;;; http://docs.aws.amazon.com/general/latest/gr/sigv4-signed-request-examples.html
+;;;
+(defun trim-white (s)
+  (string-trim '(#\Space #\Tab) s))
+
+(defun trim-downcase-header (header)
+  (cons (string-downcase (trim-white (car header))) (cdr header)))
+
+(defun format-canonical-header-string (canonical-headers &optional (result ""))
+  (let ((header (first canonical-headers)))
+    (if (null header)
+	result
+	(format-canonical-header-string (rest canonical-headers) (format nil "~a~a:~a~c" result (car header) (cdr header) #\Newline)))))
+
+;;;
+;;; '(("a" . 1) ("b" . 2) ("c" . 3)) -> "a;b;c"
+;;;
+(defun format-canonical-signed-headers-string (canonical-headers &optional (result "") (separator ""))
+  (let ((header (first canonical-headers)))
+    (if (null header)
+	result
+	(format-canonical-signed-headers-string (rest canonical-headers) (format nil "~a~a~a" result separator (car header)) ";"))))
+
+;;;
+;;; take a list of ("a" . b) pairs, trim and downcase the car ("a"),
+;;; then sort
+;;;
+(defun canonical-headers (headers)
+  (sort (mapcar #'trim-downcase-header headers) #'string< :key #'car))
+
+(defun aws4-authorization-string (aws-host base-headers content_s the-time amz-time region_s service access-key secret-key)
+  (when (and access-key secret-key)
+    (let* ((canonical-headers (canonical-headers (cons (cons "host" aws-host) base-headers)))
+	   (signed-headers-string (format-canonical-signed-headers-string canonical-headers))
+	   (payload-hash (sha256/hs64 (string-to-octets content_s)))
+	   (canonical-request (concatenate 'string "POST" *nl* "/" *nl* "" *nl* (format-canonical-header-string canonical-headers) *nl* signed-headers-string *nl* payload-hash))
+	   (algorithm "AWS4-HMAC-SHA256")
+	   (credential-scope (aws4-credential-scope the-time region_s service))
+	   (string-to-sign (concatenate 'string algorithm  *nl* amz-time *nl* credential-scope *nl* (sha256/hs64 (string-to-octets canonical-request))))
+	   (signature (ba/hs64 (aws-sign string-to-sign (aws4-signing-key secret-key the-time region_s service)))))
+      (concatenate 'string  algorithm " " "Credential=" access-key "/" credential-scope ", SignedHeaders=" signed-headers-string ", Signature=" signature))))
+
+(defun aws4-authorization-header (aws-host base-headers content_s the-time amz-time region_s service access-key secret-key)
+  (let ((authorization-string (aws4-authorization-string aws-host base-headers content_s the-time amz-time region_s service access-key secret-key)))
+    (when authorization-string
+      (list (cons "Authorization" authorization-string)))))
+
+;;;
+;;; service = "cognito-idp"
+;;; target = "AWSCognitoIdentityProviderService.AdminGetUser"
+;;;
+;;; => result_js result-code response_js
+;;;    if result-code is 200, result_js will be forced to t if it is nil,
+;;;       otherwise result_js passed unchanged
+;;;
+(defun aws4-post (service pool-id target content &key (access-key nil) (secret-key nil) (the-time (local-time:now)))
+  (assert (equal (null access-key) (null secret-key)))
+  (let* ((region_s (region/s pool-id))
+	 (aws-host (make-aws-host/s service region_s))
+	 (content_s (cl-json:encode-json-to-string content))
+	 (amz-time (aws-timestamp the-time))
+	 (base-headers `(("Content-type" . "application/x-amz-json-1.1")
+			 ("X-Amz-Date" . ,amz-time)
+			 ("X-Amz-Target" . ,target))))
+    (multiple-value-bind (result_js result-code response_js)
+	(post (make-aws-endpoint aws-host)
+	      (append base-headers (aws4-authorization-header aws-host base-headers content_s the-time amz-time region_s service access-key secret-key))
+	      content_s)
+      (if (equal result-code 200)
+	  (if result_js
+	      (values result_js result-code response_js)
+	      (values t result-code response_js))
+	  (values result_js result-code response_js)))))
 
 ;;;
 ;;; Python pow(base exp modulus)
@@ -204,12 +332,6 @@
     (assert (not (zerop (mod result *n*))))
     result))
 
-(defun sha256/ba (vector_ba)
-  (ironclad:digest-sequence :sha256 vector_ba))
-
-(defun sha256/hs64 (vector_ba)
-  (pad-hex-string (ironclad:byte-array-to-hex-string (sha256/ba vector_ba))))
-
 ;;;
 ;;; return the integer sha256 hash of string_hs
 ;;;
@@ -236,11 +358,11 @@
 	(ironclad:update-hmac hkdf (string-to-octets (format nil "Caldera Derived Key~c" #\Soh)))
 	(subseq (ironclad:hmac-digest hkdf) 0 16)))))
 
-(defun client-secret-hash/s64 (e-mail_s client-id_s client-secret_s)
+(defun client-secret-hash/s64 (username client-id_s client-secret_s)
   (let ((hmac (ironclad:make-hmac (string-to-octets client-secret_s) :sha256)))
-    (ironclad:update-hmac hmac (string-to-octets e-mail_s))
+    (ironclad:update-hmac hmac (string-to-octets username))
     (ironclad:update-hmac hmac (string-to-octets client-id_s))
-    (cl-base64:usb8-array-to-base64-string (ironclad:hmac-digest hmac))))  
+    (cl-base64:usb8-array-to-base64-string (ironclad:hmac-digest hmac))))
 
 (defun password-authentication-key/ba (password_s large-a small-a k pool_s user-id-for-srp srp-b salt)
   (let ((u (calculate-u large-a srp-b)))
@@ -259,21 +381,12 @@
 					    (string-to-octets timestamp_s)))
     (cl-base64:usb8-array-to-base64-string (ironclad:hmac-digest hmac))))
 
-(defun verify-password-content/s (client-id_s timestamp_s username_s secret-block_b64s signature-string_b64s secret-hash_s64 user-email_s)
-  (cl-json:encode-json-to-string `(("ChallengeName" . "PASSWORD_VERIFIER")
-				   ("ClientId" . ,client-id_s)
-				   ("ChallengeResponses" . (("USERNAME" . ,username_s)
-							    ("PASSWORD_CLAIM_SECRET_BLOCK" . ,secret-block_b64s)
-							    ("TIMESTAMP" . ,timestamp_s)
-							    ("PASSWORD_CLAIM_SIGNATURE" . ,signature-string_b64s)
-							    ,@(if secret-hash_s64 `(("SECRET_HASH" . ,secret-hash_s64)
-										    ("EMAIL" . ,user-email_s))))))))
-
-(defun verify-password (the-time url_s password_s large-a small-a k client-id_s pool_s secret-hash_s64 user-email_s challenge-parameters)
+(defun verify-password (service pool-id the-time password_s large-a small-a k client-id_s secret-hash_s64 user-email_s challenge-parameters)
   (let* ((user-id-for-srp_s (xjson:json-key-value :+USER-ID-FOR-SRP+ challenge-parameters))
 	 (secret-block_b64s (xjson:json-key-value :+SECRET-BLOCK+ challenge-parameters))
 	 (username_s (xjson:json-key-value :+USERNAME+ challenge-parameters))
 	 (timestamp_s (timestamp/s the-time))
+	 (pool_s (pool/s pool-id))
 	 (hkdf_ba (password-authentication-key/ba password_s
 						  large-a
 						  small-a
@@ -284,41 +397,37 @@
 						  (hex-string-to-integer (xjson:json-key-value :+SALT+ challenge-parameters))))
 	 (secret-block_ba (cl-base64:base64-string-to-usb8-array secret-block_b64s))
 	 (signature-string_b64s (signature-string/b64s hkdf_ba pool_s user-id-for-srp_s secret-block_ba timestamp_s)))
-    (multiple-value-bind (result_js result-code response_js)
-	(post url_s
-	      '(("Content-type" . "application/x-amz-json-1.1")
-		("X-Amz-Target" . "AWSCognitoIdentityProviderService.RespondToAuthChallenge"))
-	      (verify-password-content/s client-id_s timestamp_s username_s secret-block_b64s signature-string_b64s secret-hash_s64 user-email_s))
-      (values result_js result-code response_js))))
+    (aws4-post service pool-id
+	       "AWSCognitoIdentityProviderService.RespondToAuthChallenge"
+	       `(("ChallengeName" . "PASSWORD_VERIFIER")
+		 ("ClientId" . ,client-id_s)
+		 ("ChallengeResponses" . (("USERNAME" . ,username_s)
+					  ("PASSWORD_CLAIM_SECRET_BLOCK" . ,secret-block_b64s)
+					  ("TIMESTAMP" . ,timestamp_s)
+					  ("PASSWORD_CLAIM_SIGNATURE" . ,signature-string_b64s)
+					  ,@(if secret-hash_s64 `(("SECRET_HASH" . ,secret-hash_s64)
+								  ("EMAIL" . ,user-email_s))))))
+	       :the-time the-time)))
 
+;;;
+;;; if attribute-value and atribute-name in required-attributes, return ((name . value))
+;;;
 (defun attribute (required-attributes attribute-name attribute-value)
   (and attribute-value (member attribute-name required-attributes :test #'equalp) (list (cons attribute-name attribute-value))))
 
-(defun change-password (url_s username_s client-id session-id secret-hash_s64
+(defun change-password (service pool-id username_s client-id session-id secret-hash_s64
 			new-password_s required-attributes new-full-name_s new-phone_s new-email_s)
-  (multiple-value-bind (change-result_js change-code change-response_js)
-      (post url_s
-	    '(("Content-type" . "application/x-amz-json-1.1")
-	      ("X-Amz-Target" . "AWSCognitoIdentityProviderService.RespondToAuthChallenge"))
-	    (cl-json:encode-json-to-string `(("ChallengeName" . "NEW_PASSWORD_REQUIRED")
-					     ("ClientId" . ,client-id)
-					     ("ChallengeResponses" . (("USERNAME" . ,username_s)
-								      ("NEW_PASSWORD" . ,new-password_s)
-								      ,@(if secret-hash_s64 `(("SECRET_HASH" . ,secret-hash_s64)))
-								      ,@(attribute required-attributes "userAttributes.name" new-full-name_s)
-								      ,@(attribute required-attributes "userAttributes.phone_number" new-phone_s)
-								      ,@(attribute required-attributes "userAttributes.email" new-email_s)))
-					     ("Session" . ,session-id))))
-    (values change-result_js change-code change-response_js)))
-  
-(defun srp-a-content/s (client-id_s username_s large-a secret-hash_s64 user-email_s)
-  (cl-json:encode-json-to-string `(("AuthFlow" . "USER_SRP_AUTH")
-				   ("ClientId" . ,client-id_s)
-				   ("AuthParameters" . (("USERNAME" . ,username_s)
-							("SRP_A" . ,(integer-to-hex-string large-a))
-							,@(if secret-hash_s64 `(("SECRET_HASH" . ,secret-hash_s64)
-										("EMAIL" . ,user-email_s)))))
-				   ("ClientMetadata" . ,(xjson:json-empty)))))
+  (aws4-post service pool-id
+	     "AWSCognitoIdentityProviderService.RespondToAuthChallenge"
+	     `(("ChallengeName" . "NEW_PASSWORD_REQUIRED")
+	       ("ClientId" . ,client-id)
+	       ("ChallengeResponses" . (("USERNAME" . ,username_s)
+					("NEW_PASSWORD" . ,new-password_s)
+					,@(if secret-hash_s64 `(("SECRET_HASH" . ,secret-hash_s64)))
+					,@(attribute required-attributes "userAttributes.name" new-full-name_s)
+					,@(attribute required-attributes "userAttributes.phone_number" new-phone_s)
+					,@(attribute required-attributes "userAttributes.email" new-email_s)))
+	       ("Session" . ,session-id))))
 
 (defun make-client-secret/s64 (client-secret client-id username)
   (if client-secret
@@ -347,70 +456,99 @@
 	(values (append creds `((:*TIMESTAMP . ,(local-time:timestamp-to-universal the-time)))) result-code response_js)
 	(values result_js result-code response_js))))
 
-(defun do-authenticate-user (the-time username password pool-id client-id client client-secret user-email
+(defun do-authenticate-user (the-time username password pool-id client-id service client-secret user-email
 			     new-password new-full-name new-phone new-email)
   (check-client-secret-parameters client-secret user-email)
-  (let* ((url_s (make-cognito-url/s client (region/s pool-id)))
-	 (small-a (generate-random-small-a))
+  (let* ((small-a (generate-random-small-a))
 	 (large-a (calculate-a small-a))
 	 (k (hash-hex-string (concatenate 'string "00" (integer-to-hex-string *n*) "0" (integer-to-hex-string *g*))))
 	 (secret-hash_s64 (make-client-secret/s64 client-secret client-id username)))
     (multiple-value-bind (result_js result-code response_js)
-	(post url_s
-	      '(("Content-type" . "application/x-amz-json-1.1")
-		("X-Amz-Target" . "AWSCognitoIdentityProviderService.InitiateAuth"))
-	      (srp-a-content/s client-id username large-a secret-hash_s64 user-email))
+	(aws4-post service pool-id
+		   "AWSCognitoIdentityProviderService.InitiateAuth"
+		   `(("AuthFlow" . "USER_SRP_AUTH")
+		     ("ClientId" . ,client-id)
+		     ("AuthParameters" . (("USERNAME" . ,username)
+					  ("SRP_A" . ,(integer-to-hex-string large-a))
+					  ,@(if secret-hash_s64 `(("SECRET_HASH" . ,secret-hash_s64)
+								  ("EMAIL" . ,user-email)))))
+		     ("ClientMetadata" . ,(xjson:json-empty)))
+		   :the-time the-time)
       (if (equal (xjson:json-key-value :*CHALLENGE-NAME result_js) "PASSWORD_VERIFIER")
 	  (let ((challenge-parameters (xjson:json-key-value :*CHALLENGE-PARAMETERS result_js)))
 	    (multiple-value-bind (verify-result_js verify-code verify-response_js)
-		(verify-password the-time url_s password large-a small-a k client-id (pool/s pool-id) secret-hash_s64 user-email challenge-parameters)
+		(verify-password service pool-id the-time password large-a small-a k client-id secret-hash_s64 user-email challenge-parameters)
 	      (if (and (new-password-required? verify-result_js) new-password)
 		  (let ((session-id (xjson:json-key-value :*SESSION verify-result_js))
 			(required-attributes (new-password-attributes verify-result_js)))
 		    (multiple-value-bind (change-result_js change-code change-response_js)
-			(change-password url_s (xjson:json-key-value :+USER-ID-FOR-SRP+ challenge-parameters) client-id session-id secret-hash_s64
+			(change-password service pool-id (xjson:json-key-value :+USER-ID-FOR-SRP+ challenge-parameters) client-id session-id secret-hash_s64
 					 new-password required-attributes new-full-name new-phone new-email)
 		      (values change-result_js change-code change-response_js)))
 		  (values verify-result_js verify-code verify-response_js))))
 	  (values result_js result-code response_js)))))
 
 (defun authenticate-user (username password pool-id client-id
-			  &key (client "cognito-idp")
+			  &key (service "cognito-idp")
 			    (client-secret nil) (user-email nil)
 			    (new-password nil) (new-full-name nil) (new-phone nil) (new-email nil))
   (let ((the-time (local-time:now)))
     (multiple-value-bind (result_js result-code response_js)
-	(do-authenticate-user the-time username password pool-id client-id client client-secret user-email new-password new-full-name new-phone new-email)
+	(do-authenticate-user the-time username password pool-id client-id service client-secret user-email new-password new-full-name new-phone new-email)
       (multiple-value-bind (time-result_js time-result-code time-response_js)
 	  (timestamp-result the-time result_js result-code response_js)
 	(values time-result_js time-result-code time-response_js)))))
 
-  
-(defun reauthenticate-user (username refresh-token pool-id client-id &key (client "cognito-idp") (client-secret nil))
-    (let* ((url_s (make-cognito-url/s client (region/s pool-id)))
-	   (secret-hash_s64 (make-client-secret/s64 client-secret client-id username))
+(defun reauthenticate-user (username refresh-token pool-id client-id &key (service "cognito-idp") (client-secret nil))
+    (let* ((secret-hash_s64 (make-client-secret/s64 client-secret client-id username))
 	   (the-time (local-time:now)))
       (multiple-value-bind (result_js result-code response_js)
-	  (post url_s
-		'(("Content-type" . "application/x-amz-json-1.1")
-		  ("X-Amz-Target" . "AWSCognitoIdentityProviderService.InitiateAuth"))
-		(cl-json:encode-json-to-string `(("AuthFlow" . "REFRESH_TOKEN_AUTH")
-						 ("ClientId" . ,client-id)
-						 ("AuthParameters" . (("USERNAME" . ,username)
-								      ("REFRESH_TOKEN" . ,refresh-token)
-								      ,@(if secret-hash_s64 `(("SECRET_HASH" . ,secret-hash_s64)))))
-						 ("ClientMetadata" . ,(xjson:json-empty)))))
+	  (aws4-post service pool-id
+		     "AWSCognitoIdentityProviderService.InitiateAuth"
+		     `(("AuthFlow" . "REFRESH_TOKEN_AUTH")
+		       ("ClientId" . ,client-id)
+		       ("AuthParameters" . (("USERNAME" . ,username)
+					    ("REFRESH_TOKEN" . ,refresh-token)
+					    ,@(if secret-hash_s64 `(("SECRET_HASH" . ,secret-hash_s64)))))
+		       ("ClientMetadata" . ,(xjson:json-empty)))
+		     :the-time the-time)
 	(multiple-value-bind (time-result_js time-result-code time-response_js)
 	    (timestamp-result the-time result_js result-code response_js)
 	  (values time-result_js time-result-code time-response_js)))))
    
-(defun sign-out (access-token pool-id &key (client "cognito-idp"))
-  (let* ((url_s (make-cognito-url/s client (region/s pool-id))))
-    (multiple-value-bind (result_js code response_js)
-	(post url_s
-	      '(("Content-type" . "application/x-amz-json-1.1")
-		("X-Amz-Target" . "AWSCognitoIdentityProviderService.GlobalSignOut"))
-	      (cl-json:encode-json-to-string `(("AccessToken" . ,access-token))))
-      (if (equal code 200)
-	  (values t code nil)
-	  (values result_js code response_js)))))
+(defun sign-out (access-token pool-id &key (service "cognito-idp"))
+  (aws4-post service pool-id
+	     "AWSCognitoIdentityProviderService.GlobalSignOut"
+	     `(("AccessToken" . ,access-token))))
+
+(defun forgot-password (username pool-id client-id &key (service "cognito-idp") (client-secret nil))
+  (let ((secret-hash_s64 (make-client-secret/s64 client-secret client-id username)))
+    (aws4-post service pool-id
+	       "AWSCognitoIdentityProviderService.ForgotPassword"
+	       `(("ClientId" . ,client-id)
+		 ("Username" . ,username)
+		 ,@(if secret-hash_s64 `(("SecretHash" . ,secret-hash_s64)))))))
+
+(defun confirm-forgot-password (username confirmation-code new-password pool-id client-id &key (service "cognito-idp") (client-secret nil))
+  (let* ((secret-hash_s64 (make-client-secret/s64 client-secret client-id username)))
+    (aws4-post service pool-id
+	       "AWSCognitoIdentityProviderService.ConfirmForgotPassword"
+	       `(("ClientId" . ,client-id)
+		 ("Username" . ,username)
+		 ("ConfirmationCode" . ,confirmation-code)
+		 ("Password" . ,new-password)
+		 ,@(if secret-hash_s64 `(("SecretHash" . ,secret-hash_s64)))))))
+
+(defun cognito-admin-op (operation username pool-id access-key secret-key service)
+  (aws4-post service pool-id
+	     operation
+	     `(("Username" . ,username)
+	       ("UserPoolId" . ,pool-id))
+	     :access-key access-key
+	     :secret-key secret-key))
+
+(defun admin-get-user (username pool-id access-key secret-key &key (service "cognito-idp"))
+  (cognito-admin-op "AWSCognitoIdentityProviderService.AdminGetUser" username pool-id access-key secret-key service))
+							  
+(defun admin-reset-user-password (username pool-id access-key secret-key &key (service "cognito-idp"))
+    (cognito-admin-op "AWSCognitoIdentityProviderService.AdminResetUserPassword" username pool-id access-key secret-key service))
