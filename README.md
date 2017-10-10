@@ -127,6 +127,14 @@ The nickname **cognito** can be used for the **cl-cognito** package.
 
 		If successful, result is t.
 		
+[Function]<br>
+**change-password** (access-token pool-id old-password new-password &key (service "cognito-idp"))
+
+		Change passowrd
+		
+		=> result, code response
+		
+		If successful, result is t
 		
 [Function]<br>
 **sign-out** (access-token pool-id &key (service "cognito-idp"))
@@ -139,9 +147,99 @@ The nickname **cognito** can be used for the **cl-cognito** package.
 		determine failure cause.
 
 [Function]<br>
+**list-users** (pool-id access-key secret-key &key (service "cognito-idp") (pagination-token nil))
+
+		List users in pool.  Note:  A non-nil pagination-token has not been tested.
+	
+		=> result, code, response
+	
+		On success, result is the list of users and their associated information.
+	
+[Function]<br>
+**admin-create-user** (username pool-id temporary-password access-key secret-key<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&key (service "cognito-idp") (delivery 'email) (force-alias nil)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+(message-action 'suppress) (user-attributes nil) (validation-data nil))
+
+		delivery is 'email or 'sms or '(email sms)
+		message-action is 'resend or 'suppress
+		user-attributes is ((attribute1 . value1) (attribute2 . value2) ...)
+		validation-data is ((attribute1 . value1) (attribute2 . value2) ...)
+
+		=> result, code, response
+
+		Create user.  On success, **result** is the response from AdminCreateUser
+		
+		Example:
+		
+		(defun create-aws-user (username real-name company e-mail phone-number temporary-password)
+		  (cognito:admin-create-user username *pool-id* temporary-password *access-key*  *secret-key*
+			                         :user-attributes `(("email" . ,e-mail)
+						                                ("email_verified" . "true")
+						                                ("name" . ,real-name)
+						                                ("phone_number" . ,phone-number)
+						                                ("custom:company" . ,company)))))
+						                                  
+		(create-aws-user "test-user" "John Doe" "John Doe, Inc." "john@doe.com" "+15556678329" "ChangeMe.")
+
+		=>
+		((:*USER
+		 (:*ATTRIBUTES
+		 ((:*NAME . "sub") (:*VALUE . "4836786e-f43c-47d9-b2e2-076aad5d9d8e"))
+		 ((:*NAME . "email_verified") (:*VALUE . "true"))
+		 ((:*NAME . "name") (:*VALUE . "John Doe"))
+		 ((:*NAME . "phone_number") (:*VALUE . "+15556678329"))
+		 ((:*NAME . "email") (:*VALUE . "john@doe.com"))
+		 ((:*NAME . "custom:company") (:*VALUE . "John Doe, Inc.")))
+		 (:*ENABLED . T) (:*USER-CREATE-DATE . 1.5076493e9)
+		 (:*USER-LAST-MODIFIED-DATE . 1.5076493e9)
+		 (:*USER-STATUS . "FORCE_CHANGE_PASSWORD") (:*USERNAME . "test-user")))
+		200
+		nil
+
+[Function]<br>
+**admin-update-user-attributes** (username pool-id attributes access-key secret-key &key (service "cognito-idp"))
+
+		user-attributes is ((attribute1 . value1) (attribute2 . value2) ...)
+		
+		=> result, code, response
+
+		Update user attributes
+		
+		Example:
+		
+		(cognito:admin-update-user-attributes "test-user" *pool-id* '(("custom:company" . "Doe John, Ltd.")) *access-key* *secret-key*)
+		
+		=>
+		T
+		200
+		NIL
+
+[Function]<br>
 **admin-get-user** (username pool-id access-key secret-key &key (service "cognito-idp"))
 
 		=> result, code, response
+		
+		Get user attributes
+		
+		Example:
+		
+		(cognito:admin-update-user-attributes "test-user" *pool-id*  *access-key* *secret-key*)
+		
+		=>
+		((:*ENABLED . T)
+		 (:*USER-ATTRIBUTES
+		  ((:*NAME . "sub") (:*VALUE . "4836786e-f43c-47d9-b2e2-076aad5d9d8e"))
+		  ((:*NAME . "email_verified") (:*VALUE . "true"))
+		  ((:*NAME . "name") (:*VALUE . "John Doe"))
+		  ((:*NAME . "phone_number") (:*VALUE . "+15556678329"))
+		  ((:*NAME . "email") (:*VALUE . "john@doe.com"))
+		  ((:*NAME . "custom:company") (:*VALUE . "Doe John, Ltd.")))
+		 (:*USER-CREATE-DATE . 1.5076493e9) (:*USER-LAST-MODIFIED-DATE . 1.50765e9)
+		 (:*USER-STATUS . "FORCE_CHANGE_PASSWORD") (:*USERNAME . "test-user"))
+		200
+		NIL
 
 [Function]<br>
 **admin-reset-user-password** (username pool-id access-key secret-key &key (service "cognito-idp"))

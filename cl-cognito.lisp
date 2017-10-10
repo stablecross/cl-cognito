@@ -381,7 +381,7 @@
 					    (string-to-octets timestamp_s)))
     (cl-base64:usb8-array-to-base64-string (ironclad:hmac-digest hmac))))
 
-(defun verify-password (service pool-id the-time password_s large-a small-a k client-id_s secret-hash_s64 user-email_s challenge-parameters)
+(defun authenticate-verify-password (service pool-id the-time password_s large-a small-a k client-id_s secret-hash_s64 user-email_s challenge-parameters)
   (let* ((user-id-for-srp_s (xjson:json-key-value :+USER-ID-FOR-SRP+ challenge-parameters))
 	 (secret-block_b64s (xjson:json-key-value :+SECRET-BLOCK+ challenge-parameters))
 	 (username_s (xjson:json-key-value :+USERNAME+ challenge-parameters))
@@ -415,7 +415,7 @@
 (defun attribute (required-attributes attribute-name attribute-value)
   (and attribute-value (member attribute-name required-attributes :test #'equalp) (list (cons attribute-name attribute-value))))
 
-(defun change-password (service pool-id username_s client-id session-id secret-hash_s64
+(defun authenticate-change-password (service pool-id username_s client-id session-id secret-hash_s64
 			new-password_s required-attributes new-full-name_s new-phone_s new-email_s)
   (aws4-post service pool-id
 	     "AWSCognitoIdentityProviderService.RespondToAuthChallenge"
@@ -477,13 +477,13 @@
       (if (equal (xjson:json-key-value :*CHALLENGE-NAME result_js) "PASSWORD_VERIFIER")
 	  (let ((challenge-parameters (xjson:json-key-value :*CHALLENGE-PARAMETERS result_js)))
 	    (multiple-value-bind (verify-result_js verify-code verify-response_js)
-		(verify-password service pool-id the-time password large-a small-a k client-id secret-hash_s64 user-email challenge-parameters)
+		(authenticate-verify-password service pool-id the-time password large-a small-a k client-id secret-hash_s64 user-email challenge-parameters)
 	      (if (and (new-password-required? verify-result_js) new-password)
 		  (let ((session-id (xjson:json-key-value :*SESSION verify-result_js))
 			(required-attributes (new-password-attributes verify-result_js)))
 		    (multiple-value-bind (change-result_js change-code change-response_js)
-			(change-password service pool-id (xjson:json-key-value :+USER-ID-FOR-SRP+ challenge-parameters) client-id session-id secret-hash_s64
-					 new-password required-attributes new-full-name new-phone new-email)
+			(authenticate-change-password service pool-id (xjson:json-key-value :+USER-ID-FOR-SRP+ challenge-parameters) client-id session-id secret-hash_s64
+						      new-password required-attributes new-full-name new-phone new-email)
 		      (values change-result_js change-code change-response_js)))
 		  (values verify-result_js verify-code verify-response_js))))
 	  (values result_js result-code response_js)))))
@@ -521,6 +521,13 @@
 	     "AWSCognitoIdentityProviderService.GlobalSignOut"
 	     `(("AccessToken" . ,access-token))))
 
+(defun change-password (access-token pool-id old-password new-password &key (service "cognito-idp"))
+  (aws4-post service pool-id
+	     "AWSCognitoIdentityProviderService.ChangePassword"
+	     `(("AccessToken" . ,access-token)
+	       ("PreviousPassword" . ,old-password)
+	       ("ProposedPassword" . ,new-password))))
+       
 (defun forgot-password (username pool-id client-id &key (service "cognito-idp") (client-secret nil))
   (let ((secret-hash_s64 (make-client-secret/s64 client-secret client-id username)))
     (aws4-post service pool-id
@@ -547,8 +554,74 @@
 	     :access-key access-key
 	     :secret-key secret-key))
 
+;;;
+;;; convert ((attribute . value) (attribute . value) ...)
+;;; to ( (("Name" . attribute) ("Value"  .value))
+;;;      (("Name" . attribute) ("Value" . value)) )
+;;;
+(defun name-value-list (attributes)
+  (loop
+     for (name . value) in attributes
+     collect (list (cons "Name" name)
+		   (cons "Value" value))))
+
+(defun name-value-object (tag attributes)
+  (if (null attributes)
+      nil
+      (list (list* tag (name-value-list attributes)))))
+
+;;;
+;;; delivery -> 'sms, or 'email or '(sms email)
+;;;
+(defun delivery-mediums (delivery)
+  (coerce (mapcar #'symbol-name (if (atom delivery) (list delivery) delivery)) 'vector))
+
+;;;
+;;; 
+;;;
+;;; delivery -> 'email or 'sms or '(email sms)
+;;; message-action -> 'resend or 'suppress
+;;; user-attributes ((attribute . value) (attribute . value) ...)
+;;; validation-data -> ((attribute . value) (attribute . value) ...)
+;;;
+(defun admin-create-user (username pool-id temporary-password access-key secret-key
+			  &key (service "cognito-idp") (delivery 'email) (force-alias nil) (message-action 'suppress) (user-attributes nil) (validation-data nil))
+  (aws4-post service pool-id
+	     "AWSCognitoIdentityProviderService.AdminCreateUser"
+	     `(("DesiredDeliveryMediums" . ,(delivery-mediums delivery))
+	       ("ForceAliasCreation" . ,(xjson:json-bool force-alias))
+	       ("MessageAction" . ,(symbol-name message-action))
+	       ("TemporaryPassword" . ,temporary-password)
+	       ,@(name-value-object "UserAttributes" user-attributes)
+	       ("Username" . ,username)
+	       ("UserPoolId" . ,pool-id)
+	       ,@(name-value-object "ValidationData" validation-data))
+	     :access-key access-key
+	     :secret-key secret-key))
+  
+			  
 (defun admin-get-user (username pool-id access-key secret-key &key (service "cognito-idp"))
   (cognito-admin-op "AWSCognitoIdentityProviderService.AdminGetUser" username pool-id access-key secret-key service))
 							  
 (defun admin-reset-user-password (username pool-id access-key secret-key &key (service "cognito-idp"))
     (cognito-admin-op "AWSCognitoIdentityProviderService.AdminResetUserPassword" username pool-id access-key secret-key service))
+
+;;;
+;;; attributes is a list of attribute value pairs, e.g. '(("custom:company" . "CompanyName") ("anotherAttribute" . "attributeValue") ...)
+;;;
+(defun admin-update-user-attributes (username pool-id attributes access-key secret-key &key (service "cognito-idp"))
+  (aws4-post service pool-id
+	     "AWSCognitoIdentityProviderService.AdminUpdateUserAttributes"
+	     `(("Username" . ,username)
+	       ("UserPoolId" . ,pool-id)
+	       ("UserAttributes" ,@(name-value-list attributes)))
+	     :access-key access-key
+	     :secret-key secret-key))
+  
+(defun list-users (pool-id access-key secret-key &key (service "cognito-idp") (pagination-token nil))
+  (aws4-post service pool-id
+	     "AWSCognitoIdentityProviderService.ListUsers"
+	     `(("UserPoolId" . ,pool-id)
+	       ,@(if pagination-token `(("PaginationToken" . ,pagination-token))))
+	     :access-key access-key
+	     :secret-key secret-key))

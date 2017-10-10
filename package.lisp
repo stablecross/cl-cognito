@@ -30,11 +30,15 @@
   (:use #:cl)
   (:nicknames #:cognito)
   (:export
+   #:admin-create-user
    #:admin-get-user
    #:admin-reset-user-password
+   #:admin-update-user-attributes
    #:authenticate-user
+   #:change-password
    #:confirm-forgot-password
    #:forgot-password
+   #:list-users
    #:new-password-attributes
    #:new-password-required?
    #:reauthenticate-user
