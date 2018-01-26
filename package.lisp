@@ -1,4 +1,4 @@
-;;; Copyright (c) 2017 William R. Felts III, All Rights Reserved
+;;; Copyright (c) 2017-2018 William R. Felts III, All Rights Reserved
 ;;;
 ;;; Redistribution and use in source and binary forms, with or without
 ;;; modification, are permitted provided that the following conditions
@@ -31,6 +31,7 @@
   (:nicknames #:cognito)
   (:export
    #:admin-create-user
+   #:admin-delete-user
    #:admin-get-user
    #:admin-reset-user-password
    #:admin-update-user-attributes

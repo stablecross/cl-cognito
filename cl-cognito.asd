@@ -1,4 +1,4 @@
-;;; Copyright (c) 2017 William R. Felts III, All Rights Reserved
+;;; Copyright (c) 2017-2018 William R. Felts III, All Rights Reserved
 ;;;
 ;;; Redistribution and use in source and binary forms, with or without
 ;;; modification, are permitted provided that the following conditions
@@ -30,7 +30,7 @@
   :description "Amazon Cognito Utilities"
   :author "Bob Felts <wrf3@stablecross.com>"
   :license "BSD"
-  :version "2.1"   
+  :version "2.2"   
   :depends-on (#:babel
                #:dexador
                #:cl-json

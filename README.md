@@ -122,6 +122,7 @@ The nickname **cognito** can be used for the **cl-cognito** package.
 **confirm-forgot-password** (username confirmation-code new-password pool-id client-id &key (service "cognito-idp") (client-secret nil))
 
 		Change password to new-password.
+		confirmation-code can be an integer or a string (e.g. 307293 or "307293")
 		
 		=> result, code, response
 
@@ -157,9 +158,11 @@ The nickname **cognito** can be used for the **cl-cognito** package.
 	
 [Function]<br>
 **admin-create-user** (username pool-id temporary-password access-key secret-key<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-&key (service "cognito-idp") (delivery 'email) (force-alias nil)<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+key (service "cognito-idp") (delivery 'email) (force-alias nil)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
 (message-action 'suppress) (user-attributes nil) (validation-data nil))
 
 		delivery is 'email or 'sms or '(email sms)
@@ -249,6 +252,23 @@ The nickname **cognito** can be used for the **cl-cognito** package.
 		Returns t on success, nil on failure.  **code** and **response** can be used to
 		determine failure cause.
 
+[Function]<br>
+**admin-delete-user** (username pool-id access-key secret-key &key (service "cognito-idp"))
+
+		=> result, code, response
+		
+		Delete user from pool.  
+		
+		Example:
+		
+		(cognito:admin-delete-user "test-user" *pool-id*  *access-key* *secret-key*)
+		
+		=> T
+		   200
+		   NIL
+
+
+		
 #### BUGS
 
 The URL to use to interact with Cognito is constructed by the private function **(make-aws-url/s service\_s region\_s)**.<br>

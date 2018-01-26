@@ -1,4 +1,4 @@
-;;; Copyright (c) 2017 William R. Felts III, All Rights Reserved
+;;; Copyright (c) 2017-2018 William R. Felts III, All Rights Reserved
 ;;;
 ;;; Redistribution and use in source and binary forms, with or without
 ;;; modification, are permitted provided that the following conditions
@@ -101,7 +101,10 @@
   (babel:string-to-octets string :encoding :utf-8))
 
 (defun json-decode-octets/js (octets)
-  (json:decode-json-from-string (octets-to-string octets)))
+  (let ((string (octets-to-string octets)))
+    (if (equalp string "")
+	nil
+	(json:decode-json-from-string string))))
 
 ;;;
 ;;; convert n to hex string
@@ -536,13 +539,16 @@
 		 ("Username" . ,username)
 		 ,@(if secret-hash_s64 `(("SecretHash" . ,secret-hash_s64)))))))
 
+;;;
+;;; confirmation code can be either a number or a string
+;;;
 (defun confirm-forgot-password (username confirmation-code new-password pool-id client-id &key (service "cognito-idp") (client-secret nil))
   (let* ((secret-hash_s64 (make-client-secret/s64 client-secret client-id username)))
     (aws4-post service pool-id
 	       "AWSCognitoIdentityProviderService.ConfirmForgotPassword"
 	       `(("ClientId" . ,client-id)
 		 ("Username" . ,username)
-		 ("ConfirmationCode" . ,confirmation-code)
+		 ("ConfirmationCode" . ,(format nil "~a" confirmation-code))
 		 ("Password" . ,new-password)
 		 ,@(if secret-hash_s64 `(("SecretHash" . ,secret-hash_s64)))))))
 
@@ -605,6 +611,9 @@
 							  
 (defun admin-reset-user-password (username pool-id access-key secret-key &key (service "cognito-idp"))
     (cognito-admin-op "AWSCognitoIdentityProviderService.AdminResetUserPassword" username pool-id access-key secret-key service))
+
+(defun admin-delete-user (username pool-id access-key secret-key &key (service "cognito-idp"))
+  (cognito-admin-op "AWSCognitoIdentityProviderService.AdminDeleteUser" username pool-id access-key secret-key service))
 
 ;;;
 ;;; attributes is a list of attribute value pairs, e.g. '(("custom:company" . "CompanyName") ("anotherAttribute" . "attributeValue") ...)
