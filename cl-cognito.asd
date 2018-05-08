@@ -30,12 +30,9 @@
   :description "Amazon Cognito Utilities"
   :author "Bob Felts <wrf3@stablecross.com>"
   :license "BSD"
-  :version "2.2"   
-  :depends-on (#:babel
-               #:dexador
-               #:cl-json
+  :version "2.3"   
+  :depends-on (#:aws-foundation
                #:cl-json-helper
-               #:cl-ppcre
                #:local-time
                #:ironclad
                #:cl-base64)
