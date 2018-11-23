@@ -413,7 +413,12 @@
 			  
 (defun admin-get-user (username pool-id access-key secret-key &key (service "cognito-idp"))
   (cognito-admin-op "AWSCognitoIdentityProviderService.AdminGetUser" username pool-id access-key secret-key service))
-							  
+
+(defun get-user (pool-id access-token &key (service "cognito-idp"))
+  (aws-foundation:aws4-post service (aws-foundation:region/s pool-id)
+			    "AWSCognitoIdentityProviderService.GetUser"
+			    `(("AccessToken" ., access-token))))
+
 (defun admin-reset-user-password (username pool-id access-key secret-key &key (service "cognito-idp"))
     (cognito-admin-op "AWSCognitoIdentityProviderService.AdminResetUserPassword" username pool-id access-key secret-key service))
 
@@ -429,6 +434,18 @@
 			    `(("Username" . ,username)
 			      ("UserPoolId" . ,pool-id)
 			      ("UserAttributes" ,@(name-value-list attributes)))
+			    :access-key access-key
+			    :secret-key secret-key))
+
+;;;
+;;; attributes is a list of strings of the attributes to delete
+;;;
+(defun admin-delete-user-attributes (username pool-id attributes access-key secret-key &key (service "cognito-idp"))
+  (aws-foundation:aws4-post service (aws-foundation:region/s pool-id)
+			    "AWSCognitoIdentityProviderService.AdminDeleteUserAttributes"
+			    `(("Username" . ,username)
+			      ("UserPoolId" . ,pool-id)
+			      ("UserAttributeNames"  ,@attributes))
 			    :access-key access-key
 			    :secret-key secret-key))
 
